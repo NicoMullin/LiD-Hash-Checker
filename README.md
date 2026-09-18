@@ -1,3 +1,5 @@
+[#VirusTotal](https://www.virustotal.com/gui/url/a282a3effdf0991efd97cc76169b2ddb9f84acdd21ce92d2d2e6d51b4cedae3a)
+
 # LET IT DIE - file check
 
 A small Windows tool that switches off the game's own file verification, so
