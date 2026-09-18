@@ -1,0 +1,21 @@
+# Build output
+dist/
+build/
+*.spec
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+
+# NEVER commit these. The backup folder holds a copy of the game's own
+# executable, and nothing here should ever carry game files.
+backup/
+*.exe
+*.upk
+*.tfc
+*.PackagePatch
+*.stock-backup
+*.stock-backup.*
