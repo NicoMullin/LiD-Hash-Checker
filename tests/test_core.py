@@ -262,6 +262,40 @@ class BackupTests(unittest.TestCase):
         self.assertEqual(3, len(kept), kept)
 
 
+class BackupCheckTests(unittest.TestCase):
+    """A backup taken from an already switched-off program is the worst case:
+    the status is read off it, so a stock game reads as fully switched off."""
+
+    def setUp(self):
+        self.stock = fake_exe([("one.upk", A), ("two.upk", B)])
+        self.off, _ = core.switch_off(self.stock, core.read_list(self.stock))
+        self.other_build = fake_exe([("one.upk", A), ("two.upk", B)], code=b"\x91" * 64)
+
+    def test_a_stock_backup_of_the_same_build_is_usable(self):
+        check = core.check_backup(self.stock, self.off)
+        self.assertTrue(check.usable)
+        self.assertTrue(check.stock)
+        self.assertEqual("", check.problem())
+
+    def test_a_switched_off_backup_is_not_stock(self):
+        check = core.check_backup(self.off, self.stock)
+        self.assertFalse(check.usable)
+        self.assertFalse(check.stock)
+        self.assertEqual(2, check.switched_off)
+        self.assertIn("not a stock copy", check.problem())
+
+    def test_another_build_is_refused_even_when_stock(self):
+        check = core.check_backup(self.other_build, self.stock)
+        self.assertTrue(check.stock)
+        self.assertFalse(check.same_build)
+        self.assertIn("different build", check.problem())
+
+    def test_being_switched_off_is_said_before_the_build(self):
+        # Both wrong: the one that changes what restoring DOES is the one to say.
+        off_other, _ = core.switch_off(self.other_build, core.read_list(self.other_build))
+        self.assertIn("not a stock copy", core.check_backup(off_other, self.stock).problem())
+
+
 class ScanTests(unittest.TestCase):
     def test_it_finds_the_checked_files_that_no_longer_match(self):
         with tempfile.TemporaryDirectory() as folder:

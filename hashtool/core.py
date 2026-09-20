@@ -376,6 +376,51 @@ def take_backup(exe: Path, folder: Path) -> tuple[Path, bool, Path | None]:
     return backup, True, retired
 
 
+@dataclass(frozen=True)
+class BackupCheck:
+    """What a backup is worth as the way back from what is installed."""
+
+    same_build: bool
+    #: How many entries the backup ITSELF has switched off. A stock copy has none.
+    switched_off: int
+
+    @property
+    def stock(self) -> bool:
+        return self.switched_off == 0
+
+    @property
+    def usable(self) -> bool:
+        return self.same_build and self.stock
+
+    def problem(self) -> str:
+        """Why this backup is not the way back, in words, or ""."""
+        if not self.stock:
+            return (f"this backup has {self.switched_off:,} entries switched off in it, "
+                    "so it is not a stock copy - restoring it would put the change back, "
+                    "not take it away")
+        if not self.same_build:
+            return ("this backup is from a different build of the game - restoring it "
+                    "would leave an executable older than the rest of the game")
+        return ""
+
+
+def check_backup(backup: bytes, live: bytes) -> BackupCheck:
+    """Is this backup the untouched original of what is installed?
+
+    Two ways it can fail. It can be from an older build, which
+    ``backup_suits`` answers. Or it can be a copy of an executable that had
+    already been switched off when it was taken - the trap this tool warns
+    about elsewhere - and then it is worse than no backup at all: the status
+    is read off it, so a stock game would be reported as switched off, and
+    restoring it would switch the check off rather than back on.
+
+    The names say which: the game never ships a name ending in ``.upx`` and
+    the like, so any in there are this tool's own work.
+    """
+    return BackupCheck(same_build=backup_suits(backup, live),
+                       switched_off=already_switched_off(backup))
+
+
 def backup_suits(backup: bytes, live: bytes) -> bool:
     """Is this backup from the same build of the game as what is installed?
 

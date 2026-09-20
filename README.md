@@ -67,6 +67,23 @@ they are relying on the check being off. Restore the executable on its own and
 the game starts refusing them, one error box at a time. Use
 **What is relying on this?** first - it tells you exactly which files those are.
 
+### The backup has to be a stock copy
+
+**Put the original back** uses the copy in `backup\` beside the program, taken
+the first time you switched anything off. If that copy came from an executable
+that had *already* been switched off, it is not an original: putting it back
+would switch the check off again rather than undo it.
+
+The program checks for that now, because the names say so - the game never
+ships a file name ending in `.upx`, so any in there are this program's own
+work. A backup like that is reported as not stock, **Put the original back** is
+switched off, and the status is read from the installed game instead. The next
+switch-off keeps that copy aside and takes a fresh one.
+
+If you are ever unsure which copy is which: Steam's *Verify integrity of game
+files* gives you a genuinely stock executable, and keeping a copy of it
+somewhere safe before you switch anything off means never needing to ask again.
+
 ## When the game updates
 
 Steam replaces the executable, so the check comes back on and your backup is

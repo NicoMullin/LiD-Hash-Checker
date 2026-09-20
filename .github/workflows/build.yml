@@ -1,0 +1,144 @@
+name: Build Windows exe
+
+# Runs on GitHub's own Windows machines, so nobody needs Python installed to
+# get a working .exe - including you.
+#
+#   push to main / a pull request -> run the tests, build, attach a zip you can
+#                                    download from the run's Artifacts section
+#   push a tag like v1.0.0        -> all of the above, plus publish a Release
+#                                    with the zip and its SHA-256 attached
+#   Actions tab -> Run workflow   -> build on demand from any branch
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    # Needed only by the release step; harmless otherwise.
+    permissions:
+      contents: write
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          # PySide6 has no wheels for 3.14 yet; 3.12 is safely inside range.
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install PySide6
+
+      - name: Install PyInstaller with a bootloader compiled here
+        # The bootloader in PyInstaller's wheel is identical in every PyInstaller
+        # program, malware included, so some antivirus engines flag it on sight.
+        # This one rewrites bytes inside another executable, which already looks
+        # like a file infector to a scanner - so it needs every point it can get.
+        # build.py prints which kind it found.
+        env:
+          PYINSTALLER_COMPILE_BOOTLOADER: "1"
+        run: pip install --no-cache-dir --no-binary pyinstaller pyinstaller
+
+      - name: Run the tests
+        run: python -m unittest discover -s tests -t . -v
+
+      - name: Build the executable
+        run: python build.py --skip-tests
+
+      - name: Work out the version label
+        id: label
+        shell: pwsh
+        run: |
+          $ref = "${{ github.ref_name }}"
+          # A tag pushed as v1.0.0 becomes 1.0.0; anything else uses the commit.
+          if ("${{ github.ref_type }}" -eq "tag") {
+            $version = $ref -replace '^v', ''
+          } else {
+            $version = "$ref-$($env:GITHUB_SHA.Substring(0,7))"
+          }
+          $safe = $version -replace '[^A-Za-z0-9._-]', '-'
+          "version=$safe" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - name: Zip it up
+        shell: pwsh
+        run: |
+          $name = "LiD-File-Check-${{ steps.label.outputs.version }}-win64.zip"
+          Compress-Archive -Path "dist/LiD File Check" -DestinationPath $name
+          "ZIP_NAME=$name" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          Get-Item $name | Select-Object Name, @{n='MB';e={[math]::Round($_.Length/1MB,1)}}
+
+      - name: Hash the zip
+        # Published with the release so anyone can check the file they got is
+        # the one built here. It is also what a VirusTotal report is keyed by,
+        # so the same string identifies the scan.
+        id: hash
+        shell: pwsh
+        run: |
+          $sha = (Get-FileHash $env:ZIP_NAME -Algorithm SHA256).Hash
+          "sha256=$sha" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          Write-Host "SHA-256: $sha"
+          "### SHA-256`n`n``$($env:ZIP_NAME)``  `n``$sha``" |
+            Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+
+      - name: Attach the zip to this run
+        uses: actions/upload-artifact@v4
+        with:
+          name: LiD-File-Check-${{ steps.label.outputs.version }}-win64
+          path: ${{ env.ZIP_NAME }}
+          if-no-files-found: error
+
+      - name: Publish a Release
+        # Only for tags, so ordinary pushes never create releases.
+        if: github.ref_type == 'tag'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $notes = "release-notes-published.md"
+          $sha = "${{ steps.hash.outputs.sha256 }}"
+          $lines = @(
+            "Unzip anywhere **writable** and run ``LiD File Check.exe``. No Python needed.",
+            "",
+            "It switches LET IT DIE's own file check off for the packages a mod replaces,",
+            "and puts it back. No game code is touched: only names inside the list of file",
+            "checksums change, and the executable stays the same size.",
+            "",
+            "**Keep the backup it takes.** The first switch-off copies your executable into",
+            "``backup\`` beside the program. That copy is the way back, so take it from a",
+            "stock executable - if the game has already been switched off, use Steam's",
+            "Verify integrity of game files first.",
+            "",
+            "---",
+            "",
+            "**Check your download.** In PowerShell, in the folder you saved it:",
+            "",
+            '```',
+            "Get-FileHash .\$env:ZIP_NAME -Algorithm SHA256",
+            '```',
+            "",
+            "It should print:",
+            "",
+            '```',
+            $sha,
+            '```',
+            "",
+            "VirusTotal report for this exact file (once it has been scanned):",
+            "https://www.virustotal.com/gui/file/$sha",
+            "",
+            "_Some antivirus flags any newly built PyInstaller program. The launcher is",
+            "compiled fresh here rather than taken from PyInstaller's wheel, which avoids",
+            "the most common false positive._"
+          )
+          Set-Content -Path $notes -Value $lines -Encoding utf8
+          gh release create "${{ github.ref_name }}" "$env:ZIP_NAME" --title "${{ github.ref_name }}" --notes-file $notes

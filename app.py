@@ -21,7 +21,7 @@ from PySide6.QtWidgets import (QApplication, QFileDialog, QFrame, QGridLayout,
                                QPushButton, QVBoxLayout, QWidget)
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from hashtool import core
+from hashtool import __version__, core
 
 APP_NAME = "LET IT DIE - file check"
 
@@ -70,7 +70,7 @@ class ScanThread(QThread):
 class Window(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle(APP_NAME)
+        self.setWindowTitle(f"{APP_NAME} {__version__}")
         self.resize(760, 560)
         self.exe: Path | None = None
         self.scan: ScanThread | None = None
@@ -182,24 +182,32 @@ class Window(QMainWindow):
                    if len(entries) != names else ""))
 
             backup = self.backup()
+            check = None
             if backup.exists():
+                check = core.check_backup(backup.read_bytes(), raw)
+            # What the installed game says about itself comes first. A backup
+            # only refines it, and a backup that is itself switched off would
+            # otherwise report a stock game as fully switched off - which is
+            # how somebody ends up trusting the wrong answer.
+            looks = core.already_switched_off(raw)
+            if check is not None and check.usable:
                 stock = backup.read_bytes()
-                same_build = core.backup_suits(stock, raw)
                 changed = core.switched_off_entries(raw, stock)
                 lost = len(core.switched_off(raw, stock))
                 self.values["Switched off"].setText(
                     f"{changed:,} of {len(entries):,} entries"
                     + (f"  -  {lost:,} file names the game can no longer look up"
                        if changed else ""))
-                self.values["Backup"].setText(
-                    str(backup) + ("" if same_build else
-                                   "   - FROM A DIFFERENT GAME BUILD, do not restore it"))
             else:
-                looks = core.already_switched_off(raw)
                 self.values["Switched off"].setText(
-                    f"{looks:,} (going by the names; no backup to compare against)")
+                    f"{looks:,} of {len(entries):,} entries (going by the names)")
+            if check is None:
                 self.values["Backup"].setText("none yet")
-            self.restore.setEnabled(backup.exists())
+            elif check.usable:
+                self.values["Backup"].setText(str(backup))
+            else:
+                self.values["Backup"].setText(f"{backup}   - {check.problem().upper()}")
+            self.restore.setEnabled(check is not None and check.usable)
         except core.Problem as problem:
             self.complain(str(problem))
 
@@ -215,13 +223,15 @@ class Window(QMainWindow):
         """A copy to come back to, or None if we should not go on."""
         backup = self.backup()
         raw = self.live()
-        if backup.exists() and core.backup_suits(backup.read_bytes(), raw):
+        check = core.check_backup(backup.read_bytes(), raw) if backup.exists() else None
+        if check is not None and check.usable:
             return backup
-        if backup.exists():
-            # From an older build: the game has updated since. Keep it, but it
-            # is not the way back from where we are now.
+        if check is not None:
+            # Either from an older build, or - the trap - a copy of an
+            # executable that had already been switched off. Keep it, but it is
+            # not the way back from where we are now.
             retired = core.retire_backup(backup)
-            self.say(f"the backup was from an older build of the game - kept as "
+            self.say(f"the backup here was not usable ({check.problem()}) - kept as "
                      f"{retired.name}, and a fresh one will be taken")
         already = core.already_switched_off(raw)
         if already:
@@ -322,7 +332,19 @@ class Window(QMainWindow):
             return
         try:
             data = backup.read_bytes()
-            if not core.backup_suits(data, self.live()):
+            check = core.check_backup(data, self.live())
+            if not check.stock:
+                QMessageBox.warning(
+                    self, APP_NAME,
+                    f"This backup is NOT a stock copy: {check.switched_off:,} of its "
+                    "entries are switched off.\n\nIt was taken from an executable "
+                    "that had already been changed, so putting it back would switch "
+                    "the check off again rather than restore it.\n\nUse Steam's "
+                    "Verify integrity of game files, then keep a copy of the fresh "
+                    "executable before switching anything off.")
+                self.say("stopped: that backup is not a stock copy")
+                return
+            if not check.same_build:
                 QMessageBox.warning(
                     self, APP_NAME,
                     "This backup is from a DIFFERENT build of the game, so it is "
@@ -345,6 +367,13 @@ class Window(QMainWindow):
         if not backup.exists():
             self.complain("this needs the original executable to compare against, "
                           "and no backup has been taken yet")
+            return
+        check = core.check_backup(backup.read_bytes(), self.live())
+        if not check.usable:
+            # Every answer here is measured against the backup, so an unusable
+            # one does not give a wrong-ish result - it gives a made-up one.
+            self.complain("this needs a stock copy to compare against, and "
+                          + check.problem())
             return
         if self.scan is not None:
             self.scan.stop()
